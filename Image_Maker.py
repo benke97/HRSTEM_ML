@@ -2,6 +2,10 @@ import numpy as np
 import random
 import math
 from scipy.ndimage import gaussian_filter
+from noise import snoise2
+from scipy.spatial import ConvexHull
+from skimage.draw import polygon
+from skimage import feature
 
 class Image_Maker:
     def __init__(self):
@@ -136,15 +140,86 @@ class Image_Maker:
         noisy_distance_map = distance_map + noise
 
         return noisy_distance_map
+    
+    def generate_perlin_noise_array(self, shape, scale=50.0, octaves=4, persistence=0.2, lacunarity=1.0, contrast=1, power=4):
+        noise_map = np.zeros(shape, dtype=np.float32)
+
+        for i in range(shape[0]):
+            for j in range(shape[1]):
+                noise_value = snoise2(
+                    i / scale,
+                    j / scale,
+                    octaves=octaves,
+                    persistence=persistence,
+                    lacunarity=lacunarity,
+                    repeatx=shape[0],
+                    repeaty=shape[1],
+                    base=42,
+                )
+
+                # Normalize the noise value to the range [0, 1]
+                noise_value = (noise_value + 1) / 2
+
+                # Apply contrast to the noise value
+                noise_value = np.clip((noise_value * contrast) - (contrast - 1) / 2, 0, 1)
+
+                # Apply power transformation to emphasize dark areas
+                noise_value = noise_value ** power
+
+                # Apply the noise to the noise_map
+                noise_map[i][j] = noise_value
+
+        return gaussian_filter(noise_map,0.7)
+
+    def generate_convex_hull_mask(self, image, point_set):
+        # Check if the input image is a valid numpy array and has dtype float64
+        if not (isinstance(image, np.ndarray) and image.dtype == np.float64):
+            raise ValueError("Input image must be a numpy array with dtype float64")
+
+        # Filter the point_set into two separate arrays based on their labels
+        label_1_points = point_set[point_set["label"] == 1][['x', 'y']].values*self.IMAGE_SIZE
+        label_0_points = point_set[point_set["label"] == 0][['x', 'y']].values*self.IMAGE_SIZE
+        #print(label_0_points,label_1_points)
+        # Create a convex hull mask for each filtered array
+        mask_1 = self.create_hull_mask(image, label_1_points)
+        mask_0 = self.create_hull_mask(image, label_0_points)
+
+        # Combine the two masks by performing a logical OR operation
+        final_mask = np.logical_or(mask_1, mask_0)
+
+        return final_mask.astype(np.float64)
+
+    def create_hull_mask(self, image, points):
+        # Check if there are enough points to form a convex hull
+        if len(points) < 3:
+            raise ValueError("Not enough points to form a convex hull")
+
+        # Compute the convex hull
+        hull = ConvexHull(points)
+
+        # Extract the vertices of the convex hull
+        vertices = points[hull.vertices]
+        # Create an empty binary mask with the same shape as the input image
+        mask = np.zeros_like(image, dtype=bool)
+
+        # Compute the coordinates of the pixels within the convex hull
+        rr, cc = polygon(vertices[:, 0], vertices[:, 1], shape=image.shape)
+
+        # Set the corresponding pixels in the binary mask to True
+        mask[rr, cc] = 1
+
+        return mask
 
     def add_noise(self, image, point_set):
+        hull_mask = self.generate_convex_hull_mask(image,point_set).T
         gaussian_noise_image = self.add_gaussian_noise(image, 0, 0.001)
+        perlin_noise = self.generate_perlin_noise_array(np.shape(image))
         distance_map = self.generate_distance_map(point_set)
         noisy_image = self.apply_poisson_noise(gaussian_noise_image)
-        distance_map =self.apply_poisson_noise(distance_map,count_scale=50)*self.generate_binary_mask(image,0.007)
+        distance_map =self.apply_poisson_noise(perlin_noise*5*hull_mask+distance_map*self.generate_binary_mask(image,0.007),count_scale=50)
         normalized_distance_map = (distance_map - np.min(distance_map)) / np.ptp(distance_map)
         normalized_noisy_image = (noisy_image - np.min(noisy_image)) / np.ptp(noisy_image)
-        noisy_image = gaussian_filter(normalized_noisy_image*30+normalized_distance_map, 0.7)
+        noisy_image = gaussian_filter(normalized_noisy_image*7+normalized_distance_map, 0.7)
         noisy_image = self.apply_poisson_noise(noisy_image,count_scale=self.poisson_val)
         return noisy_image
 
