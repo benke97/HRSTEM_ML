@@ -6,6 +6,7 @@ from noise import snoise2
 from scipy.spatial import ConvexHull
 from skimage.draw import polygon
 from skimage import feature
+import cv2
 
 class Image_Maker:
     def __init__(self):
@@ -211,7 +212,7 @@ class Image_Maker:
         return mask
 
     def add_noise(self, image, point_set):
-        hull_mask = self.generate_convex_hull_mask(image,point_set).T
+        hull_mask = cv2.GaussianBlur(self.generate_convex_hull_mask(image,point_set).T,(7,7),0,0)
         gaussian_noise_image = self.add_gaussian_noise(image, 0, 0.001)
         perlin_noise = self.generate_perlin_noise_array(np.shape(image))
         distance_map = self.generate_distance_map(point_set)
